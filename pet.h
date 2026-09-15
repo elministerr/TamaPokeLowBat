@@ -170,6 +170,7 @@ public:
   // ultima hora real persistida; sirve para resembrar un RTC que perdio la hora
   uint32_t savedEpoch() { return prefs.getUInt("seen", 0); }
   void flushSave();
+  void saveForPowerOff(uint32_t nowEpoch);  // guarda TODO y la hora de apagado
 
 private:
   Preferences prefs;

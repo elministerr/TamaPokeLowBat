@@ -22,6 +22,7 @@
 #include "rtcbat.h"
 #include "i18n.h"
 #include "audio.h"
+#include "idle_power.h"
 
 // Version del firmware. Subir este numero en cada release (y manifest.json para
 // el instalador web). Se muestra en la pantalla de ajustes y por serie al arrancar.
@@ -152,9 +153,8 @@ static const int16_t STARTER_DEX[3] = { 1, 4, 7 };
 volatile bool gTouchIrq = false;
 void IRAM_ATTR touchIsr() { gTouchIrq = true; }
 uint32_t lastRender = 0;
-// proteccion del AMOLED: atenuado por inactividad
-uint32_t lastInteract = 0;
-uint8_t dimStage = 0;        // 0 despierto, 1 atenuado (90s), 2 casi apagado (5min)
+// Inactividad: atenuar + dormir a los 90 s; apagar el PMU a los 120 s.
+IdlePower idlePower;
 bool swallowGesture = false; // el toque que despierta no acciona nada
 uint32_t holdStart = 0;     // pulsacion larga sobre el bicho
 uint32_t confirmUntil = 0;  // dialogo "soltar?" activo hasta este millis
@@ -235,7 +235,7 @@ void setup() {
 
   audioBegin();  // ES8311 + I2S + amplificador (suena un jingle de arranque)
 
-  lastInteract = millis();
+  idlePower.recordActivity();
 }
 
 // carga/descarga el sprite de SD cuando cambia la especie
@@ -263,8 +263,7 @@ void loop() {
   pet.update(now);
 
   // el amplificador sigue al estado de sueno (la llamada sale sola si no cambia).
-  // Aqui cubre todas las vias: el boton de luz, el sueno nocturno y el que llega
-  // aplicado desde la progresion offline.
+  // Aqui cubre el boton de luz y el sueno restaurado desde el guardado.
   audioSetSleeping(pet.sleeping);
 
   // avisa con un sonido cuando el bicho pasa a estar listo para evolucionar
@@ -283,24 +282,26 @@ void loop() {
   handleSerial();
   ensureMon();
 
+  now = millis();  // tactil, serie y SD pueden haber tardado desde el inicio
+
   // pulsacion corta del PWR: pantalla on/off
   static uint32_t lastPwr = 0;
   if (now - lastPwr > 250) {
     lastPwr = now;
     if (pwrShortPressed()) {
       screenOff = !screenOff;
-      if (!screenOff) lastInteract = now;
+      idlePower.recordActivity();
     }
   }
 
-  updateBrightness(now);
+  if (updatePower()) return;  // si el PMU tarda/falla, no seguir jugando a oscuras
 
   // vuelca el autoguardado periodico SOLO con la pantalla atenuada/apagada o
   // durmiendo: la escritura a NVS congela ~1s ambos cores (caché de flash off),
   // y aqui no hay animacion que se corte ni dedo esperando respuesta. Con 90s
   // de inactividad la pantalla ya atenua, asi que se vuelca enseguida; el uso
   // activo persiste igual por los guardados de cada accion (comer/jugar/...).
-  if (pet.savePending() && (screenOff || dimStage >= 1 || pet.sleeping)) {
+  if (pet.savePending() && (screenOff || idlePower.dimmed() || pet.sleeping)) {
     pet.flushSave();
   }
 
@@ -319,7 +320,7 @@ void loop() {
     Serial.printf("HEALTH up=%lus heap=%u min=%u bat=%d%% mv=%d chg=%d usb=%d dim=%u off=%d\n",
                   (unsigned long)(now / 1000), ESP.getFreeHeap(), ESP.getMinFreeHeap(),
                   batPercent(), batMillivolts(), batCharging() ? 1 : 0,
-                  usbPresent() ? 1 : 0, dimStage, screenOff ? 1 : 0);
+                  usbPresent() ? 1 : 0, (unsigned)idlePower.dimmed(), screenOff ? 1 : 0);
   }
 
   // 85 ms en juego/saco: margen seguro para que el redibujado no pise el envio
@@ -337,23 +338,36 @@ void loop() {
   }
 }
 
-// brillo segun sueno + inactividad (proteccion del AMOLED)
-void updateBrightness(uint32_t now) {
-  // los eventos visibles despiertan la pantalla solos
-  if (pet.evolving() || pet.ceremony || pet.eating() || pet.showHeart()) {
-    lastInteract = now;
-  }
-  uint32_t idle = now - lastInteract;
-  dimStage = (idle > 300000) ? 2 : (idle > 90000) ? 1 : 0;
+// Sueno + brillo + apagado, siempre con tiempo fresco tras procesar entradas.
+bool updatePower() {
+  bool shutdownDue = idlePower.update(pet);
+  audioSetSleeping(pet.sleeping);
+  if (shutdownDue) screenOff = true;
   uint8_t target = pet.sleeping ? 25 : (usbPresent() ? 180 : 145);
-  if (dimStage == 1) target = pet.sleeping ? 10 : 60;
-  else if (dimStage == 2) target = 8;
+  if (idlePower.dimmed()) target = pet.sleeping ? 10 : 60;
   if (screenOff) target = 0;
   static uint8_t current = 255;
   if (target != current) {
     current = target;
     panel->setBrightness(target);
   }
+
+  static bool savedForShutdown = false;
+  if (shutdownDue) {
+    if (!savedForShutdown) {
+      audioSetSleeping(true);
+      pet.saveForPowerOff(rtcEpoch());
+      savedForShutdown = true;
+      Serial.println("Inactividad 120s: apagando (RTC sigue activo)");
+    }
+    pwrShutdown();
+    // Normalmente no llegamos aqui. Si falla I2C, reintentar sin machacar NVS;
+    // el siguiente loop permite cancelar el apagado con una nueva entrada.
+    delay(1000);
+    return true;
+  }
+  savedForShutdown = false;
+  return false;
 }
 
 // ---------- consola serie (provision de SD + depuracion) ----------
@@ -363,7 +377,11 @@ void handleSerial() {
   String line = Serial.readStringUntil('\n');
   line.trim();
   if (line.length() == 0) return;
-  if (sdSerialCommand(line)) return;
+  idlePower.recordActivity();
+  if (sdSerialCommand(line)) {
+    idlePower.recordActivity();  // una transferencia puede durar mas de 120 s
+    return;
+  }
 
   if (line == "HATCH") {
     pet.eggTap(); pet.eggTap(); pet.eggTap();
@@ -495,13 +513,18 @@ void handleTouch() {
   if (Wire.endTransmission() != 0) return;  // no responde: se reintenta en 20 ms
   int16_t x, y;
   bool pressed = touch.getPoint(&x, &y, 1) > 0;
+  // Tambien cuenta mantener el dedo apoyado y soltarlo.
+  if (pressed || wasPressed) idlePower.recordActivity();
 
   // saco de entrenamiento: cada toque cuenta al instante (aporrear rapido)
   if (sackOpen) {
     if (pressed && !wasPressed) {
-      lastInteract = millis();
-      if (y < 72) sackOpen = false;  // tocar arriba = abandonar
-      else sackTap();
+      swallowGesture = idlePower.dimmed() || screenOff;
+      screenOff = false;
+      if (!swallowGesture) {
+        if (y < 72) sackOpen = false;  // tocar arriba = abandonar
+        else sackTap();
+      }
     }
     wasPressed = pressed;
     return;
@@ -512,9 +535,8 @@ void handleTouch() {
     tY0 = tYl = y;
     tStart = millis();
     holdFired = false;
-    swallowGesture = (dimStage > 0) || screenOff;  // si estaba a oscuras, solo despierta
+    swallowGesture = idlePower.dimmed() || screenOff;  // solo despierta la pantalla
     screenOff = false;
-    lastInteract = millis();
   } else if (pressed) {  // sigue apoyado
     tXl = x;
     tYl = y;
@@ -526,7 +548,6 @@ void handleTouch() {
       holdFired = true;
     }
   } else if (wasPressed) {  // levanta el dedo: resolver gesto
-    lastInteract = millis();
     int dx = tXl - tX0, dy = tYl - tY0;
     uint32_t dt = millis() - tStart;
     if (!holdFired && !swallowGesture) {

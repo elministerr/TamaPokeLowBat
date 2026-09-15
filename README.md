@@ -216,6 +216,21 @@ If one bottoms out it counts as a *slip-up*.
 **Physical PWR button:** short = screen on/off · long (4 s) = full power-off
 (the RTC stays alive, so time passes even while it's off).
 
+**Automatic battery saving:** after **90 seconds without input**, the display
+dims and the pet goes to sleep. After **120 seconds total**, the firmware saves
+the pet and the current RTC time, then powers off through the AXP2101. The RTC
+keeps running while the battery remains connected and has charge. Use **PWR**
+to turn the device back on; touching the screen cannot wake a powered-off device.
+
+Touch (including holding a finger down), a short PWR press, or serial commands
+restart both timers. Animations do not restart them. This also applies on USB
+power and when the screen was switched off manually. Active serial file transfers
+finish before the inactivity countdown restarts.
+
+Before shutdown, the first touch on a dimmed screen only restores the display.
+The pet **stays asleep until you tap Light**, including after powering back on;
+offline progression treats the saved pet as sleeping.
+
 ## Decisions: you choose, and you watch
 
 The three life-cycle endings and evolution **don't happen on their own** — when

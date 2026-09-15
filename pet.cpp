@@ -556,6 +556,11 @@ PetMood Pet::mood() const {
   return MOOD_HAPPY;
 }
 
+void Pet::saveForPowerOff(uint32_t nowEpoch) {
+  if (nowEpoch) lastSeenEpoch = nowEpoch;
+  save();  // obligatorio aunque no haya autoguardado pendiente o falle el RTC
+}
+
 void Pet::save() {
   ticksSinceSave = 0;
   pendingSave = false;

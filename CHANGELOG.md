@@ -6,6 +6,15 @@ bottom of the clock/settings screen (swipe down) and `web/manifest.json`.
 Updating from the [web installer](https://socquique.github.io/TamaPoke/web/)
 **without** ticking "Erase device" keeps your Pokémon.
 
+## Unreleased
+
+- After 90 seconds without user input, dim the display and put the pet to sleep.
+  At 120 seconds total, save the pet and RTC timestamp and request full AXP2101
+  shutdown, preserving the RTC supply. Touch/PWR/serial activity restarts both
+  deadlines; only the Light button wakes the pet, including after a restart.
+- Prevent touch timestamps newer than the loop timestamp from briefly selecting
+  an idle power state. Holding a finger down also counts as activity.
+
 ## [1.16] - 2026-09-09
 
 ### Fixed

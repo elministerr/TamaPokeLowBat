@@ -24,6 +24,7 @@ python3 test/test_tools.py    # solo las herramientas de tools/
 | Fichero | Que comprueba |
 |---|---|
 | `test_pet.cpp` | huevo y eleccion de inicial, comida, tick de estadisticas, sueno, descuidos, niveles, evolucion (incluida la rama de Eevee), stats de combate, entrenamiento y minijuego, racha y vinculo, medallas, ceremonias, progresion offline y guardado en NVS |
+| `test_idle_power.cpp` | sueno a los 90 s, apagado a los 120 s totales, reinicio por actividad, wraparound, guardado antes de apagar y sueno persistente tras reiniciar |
 | `test_dex.cpp` | integridad de la Pokedex: nombres ASCII, cadenas evolutivas sin bucles, toda especie alcanzable, ninguna linea imposible de completar, limites de los buffers de la UI |
 | `test_i18n.cpp` | los 6 idiomas completos, sin acentos (la fuente GFX es ASCII), y con los mismos `%u`/`%s` que le pasa el sketch en cada llamada |
 | `test_tools.py` | los scripts de `tools/` compilan, los datos de la Pokedex son coherentes y `dex.h` sigue coincidiendo con lo que genera `tools/gen_dex.py` |

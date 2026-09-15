@@ -95,3 +95,14 @@ bool pwrShortPressed() {
   if (hit) pmu.clearIrqStatus();
   return hit;
 }
+
+void pwrShutdown() {
+  if (!pmuOk) {
+    Serial.println("No se puede apagar: AXP2101 no detectado");
+    return;
+  }
+  // XPowersAXP2101::shutdown corta los canales principales y conserva VRTC.
+  // No desactivar BATFET ni la alimentacion de respaldo del PCF85063.
+  pmu.clearIrqStatus();
+  pmu.shutdown();
+}
