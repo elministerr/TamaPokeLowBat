@@ -54,13 +54,6 @@ void MockSerial::print(const char *s) { if (!gQuiet) fputs(s, stdout); }
 void MockSerial::println(const char *s) { if (!gQuiet) printf("%s\n", s); }
 void MockSerial::begin(unsigned long) {}
 
-// ---------------- audio (stubs) ----------------
-static bool gAudioOn = true;
-void audioBegin() {}
-void sfxPlay(uint8_t) {}
-void audioSetEnabled(bool on) { gAudioOn = on; }
-bool audioEnabled() { return gAudioOn; }
-
 // ---------------- Preferences en memoria ----------------
 typedef std::map<std::string, std::vector<uint8_t> > KV;
 static std::map<std::string, KV> gStore;

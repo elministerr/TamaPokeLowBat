@@ -838,14 +838,157 @@ TEST(offline, tope_de_dos_semanas) {
   CHECK_EQ(p.ageMinutes, (uint32_t)(14u * 24 * 60));
 }
 
-TEST(offline, menos_de_dos_minutos_no_hace_nada) {
+TEST(offline, short_absence_counts_and_keeps_remaining_seconds) {
   Pet p;
   makePet(p, 4);
   setStats(p, 80, 80, 80, 100);
   p.setClock(1000u * 86400);
   p.syncClock(1000u * 86400 + 90);
+  CHECK_EQ(p.ageMinutes, (uint32_t)1);
+  CHECK_EQ(p.fullness, (uint8_t)78);
+  p.syncClock(1000u * 86400 + 120); // los 30 s pendientes + otros 30 = otro minuto
+  CHECK_EQ(p.ageMinutes, (uint32_t)2);
+}
+
+TEST(offline, subminute_absences_accumulate_across_reboots) {
+  Pet p;
+  makePet(p, 4);
+  const uint32_t epoch = 1800000000;
+  p.setClock(epoch);
+  Pet q;
+  q.begin();
+  q.syncClock(epoch + 59);
+  CHECK_EQ(q.ageMinutes, (uint32_t)0);
+  mockSetMillis(0);
+  Pet r;
+  r.begin();
+  r.syncClock(epoch + 60);
+  CHECK_EQ(r.ageMinutes, (uint32_t)1);
+  r.syncClock(epoch + 60); // la misma hora no debe volver a contar el minuto
+  CHECK_EQ(r.ageMinutes, (uint32_t)1);
+}
+
+TEST(offline, partial_live_minute_combines_with_sleeping_offline_time) {
+  Pet p;
+  makePet(p, 4);
+  setStats(p, 80, 80, 20, 100);
+  p.toggleLight();
+  const uint32_t epoch = 1800000000;
+  p.setClock(epoch);
+  mockAdvanceMillis(40000);
+  p.update(millis());
+  p.saveForPowerOff(epoch + 40);
+  mockSetMillis(0);
+  Pet q;
+  q.begin();
+  q.syncClock(epoch + 60);
+  CHECK_EQ(q.ageMinutes, (uint32_t)1);
+  CHECK_EQ(q.energy, (uint8_t)26);
+  mockAdvanceMillis(59999);
+  q.update(millis());
+  CHECK_EQ(q.ageMinutes, (uint32_t)1);
+  mockAdvanceMillis(1);
+  q.update(millis());
+  CHECK_EQ(q.ageMinutes, (uint32_t)2);
+}
+
+TEST(offline, fraction_returns_to_live_timer_after_each_restart) {
+  Pet p;
+  makePet(p, 4);
+  const uint32_t epoch = 1800000000;
+  p.setClock(epoch);
+  Pet q;
+  q.begin();
+  q.syncClock(epoch + 15);
+  mockAdvanceMillis(15000);
+  q.update(millis());
+  q.saveForPowerOff(epoch + 30);
+  mockSetMillis(0);
+  Pet r;
+  r.begin();
+  r.syncClock(epoch + 45);
+  mockAdvanceMillis(14999);
+  r.update(millis());
+  CHECK_EQ(r.ageMinutes, (uint32_t)0);
+  mockAdvanceMillis(1);
+  r.update(millis());
+  CHECK_EQ(r.ageMinutes, (uint32_t)1);
+}
+
+TEST(offline, regular_save_pairs_fraction_with_current_clock) {
+  Pet p;
+  makePet(p, 4);
+  const uint32_t epoch = 1800000000;
+  p.setClock(epoch);
+  mockAdvanceMillis(45000);
+  p.toggleLight(); // guarda sin una lectura nueva del RTC
+  CHECK_EQ(p.savedEpoch(), epoch + 45);
+  mockSetMillis(0);
+  Pet q;
+  q.begin();
+  q.syncClock(epoch + 60);
+  CHECK_EQ(q.ageMinutes, (uint32_t)1); // 45 s no se cuentan dos veces
+}
+
+TEST(offline, clock_failure_or_backwards_time_preserves_fraction) {
+  Pet p;
+  makePet(p, 4);
+  const uint32_t epoch = 1800000000;
+  p.setClock(epoch);
+  mockAdvanceMillis(45000);
+  p.saveForPowerOff(epoch + 45);
+  mockSetMillis(0);
+  Pet q;
+  q.begin();
+  q.syncClock(epoch - 100);
+  CHECK_EQ(q.ageMinutes, (uint32_t)0);
+  q.syncClock(0);
+  mockAdvanceMillis(15000);
+  q.update(millis());
+  CHECK_EQ(q.ageMinutes, (uint32_t)1);
+}
+
+TEST(offline, saved_fraction_is_safe_across_millis_wraparound) {
+  Pet p;
+  makePet(p, 4);
+  mockSetMillis(UINT32_MAX - 30000);
+  p.newEgg(); // inicia el contador cerca de la vuelta del reloj
+  p.eggTap(); p.eggTap(); p.eggTap();
+  const uint32_t epoch = 1800000000;
+  p.setClock(epoch);
+  mockAdvanceMillis(45000);
+  p.saveForPowerOff(epoch + 45);
+  mockSetMillis(0);
+  Pet q;
+  q.begin();
+  q.syncClock(epoch + 60);
+  CHECK_EQ(q.ageMinutes, (uint32_t)1);
+}
+
+TEST(offline, invalid_saved_fraction_does_not_create_age) {
+  Pet p;
+  makePet(p, 4);
+  Preferences prefs;
+  prefs.begin("tamapoke", false);
+  prefs.putUInt("tickms", UINT32_MAX);
+  Pet q;
+  q.begin();
+  q.syncClock(1800000000);
+  q.update(millis());
+  CHECK_EQ(q.ageMinutes, (uint32_t)0);
+}
+
+TEST(offline, new_egg_starts_with_a_full_minute) {
+  Pet p;
+  makePet(p, 4);
+  mockAdvanceMillis(50000);
+  p.newEgg();
+  mockAdvanceMillis(10000);
+  p.update(millis());
   CHECK_EQ(p.ageMinutes, (uint32_t)0);
-  CHECK_EQ(p.fullness, (uint8_t)80);
+  mockAdvanceMillis(50000);
+  p.update(millis());
+  CHECK_EQ(p.ageMinutes, (uint32_t)1);
 }
 
 TEST(offline, el_huevo_eclosiona_en_tu_ausencia) {

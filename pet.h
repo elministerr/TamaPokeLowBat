@@ -105,6 +105,7 @@ public:
   void release();  // soltar (pulsacion larga + confirmar)
   void syncClock(uint32_t nowEpoch);  // aplica el tiempo transcurrido apagado
   void setClock(uint32_t nowEpoch);   // fija la hora sin aplicar progresion
+  void observeClock(uint32_t nowEpoch); // referencia RTC para fechar cada guardado
   void startFarewell();  // tambien usable desde la consola serie (BYE)
   void startRunaway();   // tambien usable desde la consola serie (RUN)
 
@@ -175,6 +176,8 @@ public:
 private:
   Preferences prefs;
   uint32_t lastTick = 0;
+  uint32_t tickCarryMs = 0;     // fraccion de minuto conservada al reiniciar
+  uint32_t clockSampleMs = 0;   // millis() de la ultima lectura valida del RTC
   uint32_t eatUntil = 0;
   uint32_t heartUntil = 0;
   uint32_t evolveUntil = 0;

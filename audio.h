@@ -17,8 +17,11 @@ enum Sfx : uint8_t {
   SFX_COUNT
 };
 
-void audioBegin();          // init ES8311 + I2S + amplificador + tarea de audio
+enum AudioVolume : uint8_t { AUDIO_OFF = 0, AUDIO_LOW, AUDIO_MEDIUM, AUDIO_HIGH, AUDIO_VOLUME_COUNT };
+
+void audioBegin(bool sleeping);  // aplicar el sueno ANTES de encender el amplificador
 void sfxPlay(uint8_t id);   // encola un efecto (no bloquea el loop)
-void audioSetEnabled(bool on);
+void audioSetVolume(AudioVolume volume);
+AudioVolume audioVolume();
 bool audioEnabled();
 void audioSetSleeping(bool sleeping);  // dormida: amplificador apagado

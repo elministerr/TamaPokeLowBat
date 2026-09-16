@@ -23,6 +23,7 @@
 #include "i18n.h"
 #include "audio.h"
 #include "idle_power.h"
+#include "display.h"
 
 // Version del firmware. Subir este numero en cada release (y manifest.json para
 // el instalador web). Se muestra en la pantalla de ajustes y por serie al arrancar.
@@ -30,7 +31,7 @@
 
 Arduino_DataBus *bus = new Arduino_ESP32QSPI(
   LCD_CS, LCD_SCLK, LCD_SDIO0, LCD_SDIO1, LCD_SDIO2, LCD_SDIO3);
-Arduino_CO5300 *panel = new Arduino_CO5300(
+Arduino_CO5300 *panel = new TamaPokeDisplay(
   bus, LCD_RESET, 0 /*rotation*/, LCD_WIDTH, LCD_HEIGHT, 6, 0, 0, 0);
 // Framebuffer completo en PSRAM: dibujamos todo y hacemos flush() (sin parpadeo)
 Arduino_Canvas *gfx = new Arduino_Canvas(LCD_WIDTH, LCD_HEIGHT, panel);
@@ -188,7 +189,7 @@ void setup() {
   // QSPI a 80MHz (por defecto 40): el flush del framebuffer es el cuello de
   // botella del fps (~56ms a 40MHz). Si el panel mostrara basura, bajar a 40M.
   if (!gfx->begin(80000000)) Serial.println("gfx->begin() fallo");
-  panel->setBrightness(180);
+  panel->setBrightness(0);  // mantener oscuro hasta dibujar el estado restaurado
   applyLangFont();  // fuente del idioma guardado (clasica salvo CJK)
 
   touch.setPins(TP_RESET, TP_INT);
@@ -233,9 +234,13 @@ void setup() {
   }
   pet.syncClock(e);
 
-  audioBegin();  // ES8311 + I2S + amplificador (suena un jingle de arranque)
+  audioBegin(pet.sleeping);
 
+  ensureMon();
+  render();  // primer frame completo, todavia con brillo 0
+  lastRender = millis();
   idlePower.recordActivity();
+  updatePower();  // brillo correcto desde el primer frame visible
 }
 
 // carga/descarga el sprite de SD cuando cambia la especie
@@ -310,7 +315,7 @@ void loop() {
   if (now - lastClock > 30000) {
     lastClock = now;
     uint32_t e = rtcEpoch();
-    if (e) pet.lastSeenEpoch = e;
+    pet.observeClock(e);
   }
 
   // latido de salud cada 5 min (para el soak test; se descarta si no hay monitor)
@@ -1494,6 +1499,8 @@ void drawClockBtn(int x, int y, const char *l) {
 #define LANG_PILL_H 30
 #define LANG_PILL_X 336          // pildora de idioma (cicla los 6 al tocar)
 #define LANG_PILL_W 96
+#define SND_PILL_X 34
+#define SND_PILL_W 160
 static const char *const LANG_CODES[LANG_COUNT] = { "ES", "EN", "FR", "DE", "IT", "PT", "JA" };
 
 void renderClock() {
@@ -1521,14 +1528,14 @@ void renderClock() {
   setCur(276, 256);
   printT(T(S_MIN));
 
-  // interruptor de sonido (izquierda de la fila de idioma)
+  // Volumen: apagado / bajo / medio / alto (izquierda del idioma)
   bool snd = audioEnabled();
-  const char *sl = snd ? T(S_SND_ON) : T(S_SND_OFF);
-  gfx->fillRoundRect(34, LANG_PILL_Y, 96, LANG_PILL_H, 8, snd ? UI_BAR_OK : UI_WHITE);
-  gfx->drawRoundRect(34, LANG_PILL_Y, 96, LANG_PILL_H, 8, UI_INK);
+  const char *sl = T((StrId)(S_SND_OFF + audioVolume()));
+  gfx->fillRoundRect(SND_PILL_X, LANG_PILL_Y, SND_PILL_W, LANG_PILL_H, 8, snd ? UI_BAR_OK : UI_WHITE);
+  gfx->drawRoundRect(SND_PILL_X, LANG_PILL_Y, SND_PILL_W, LANG_PILL_H, 8, UI_INK);
   gfx->setTextColor(snd ? UI_BG_DAY : UI_INK);
   setSize(2);
-  setCur(34 + (96 - textW(sl, 2)) / 2, LANG_PILL_Y + 8);
+  setCur(SND_PILL_X + (SND_PILL_W - textW(sl, 2)) / 2, LANG_PILL_Y + 8);
   printT(sl);
 
   // selector de idioma: una pildora que cicla los 6 idiomas al tocar
@@ -1570,9 +1577,9 @@ void clockTap(int16_t x, int16_t y) {
     return;
   }
   if (y >= LANG_PILL_Y && y <= LANG_PILL_Y + LANG_PILL_H) {
-    if (x >= 34 && x < 130) {                  // interruptor de sonido
-      audioSetEnabled(!audioEnabled());
-      if (audioEnabled()) sfxPlay(SFX_TAP);    // confirma al encender
+    if (x >= SND_PILL_X && x < SND_PILL_X + SND_PILL_W) {
+      audioSetVolume((AudioVolume)((audioVolume() + 1) % AUDIO_VOLUME_COUNT));
+      sfxPlay(SFX_TAP);  // muestra el nivel elegido; apagado/durmiendo no suena
       return;
     }
     if (x >= LANG_PILL_X && x < LANG_PILL_X + LANG_PILL_W) {  // cicla idioma

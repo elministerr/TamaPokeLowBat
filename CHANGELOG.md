@@ -8,6 +8,14 @@ Updating from the [web installer](https://socquique.github.io/TamaPoke/web/)
 
 ## Unreleased
 
+- Reduce Low and Medium sound amplitude by half; High retains its original level.
+- Preserve unfinished minutes across shutdowns, count offline periods under two
+  minutes, and resume the live tick with the saved fraction. Pair saved game
+  state with a current timestamp even between periodic RTC reads.
+- Restore sleep before enabling the audio amplifier and reveal the display only
+  after the first complete frame is ready at the correct brightness.
+- Replace the sound toggle with saved Off/Low/Medium/High volume levels in all
+  seven languages. Existing ON retains its volume; OFF stays muted.
 - After 90 seconds without user input, dim the display and put the pet to sleep.
   At 120 seconds total, save the pet and RTC timestamp and request full AXP2101
   shutdown, preserving the RTC supply. Touch/PWR/serial activity restarts both

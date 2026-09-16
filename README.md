@@ -43,6 +43,9 @@ A quick reference to how the game really works (values straight from the code).
   of real time. Leveling is purely time-based — caring well doesn't speed it up,
   but neglect *delays evolution*.
 - It keeps **aging while powered off** (the RTC runs), catching up to **2 weeks** max.
+- Short absences count too: unfinished minutes are saved and carried across
+  restarts. For example, 40 seconds running plus 20 seconds powered off adds one
+  minute of progression. Sleeping pets also recover energy during that time.
 
 ### The four stats (0–100)
 Needs: **FOOD**, **JOY**, **ENE** (energy), **HYG** (hygiene). Start 80 / 80 / 80 / 100.
@@ -210,7 +213,10 @@ If one bottoms out it counts as a *slip-up*.
 - Vertical swipe up = open the **stat card** (4 pages: Profile / Battle / Medals /
   Progress; swipe between them; tap the name on Profile to rename; on Battle the
   "Train strength" button opens the bag).
-- Swipe down = **set the clock** and pick the **language** + sound on/off.
+- Swipe down = **set the clock** and pick the **language** + sound volume.
+  Tap the sound button to cycle **Off → Low → Medium → High → Off**. The level
+  is saved immediately. High matches the previous ON volume; an existing OFF
+  setting stays muted. Sleeping pets remain silent at every volume level.
 - Long press (3 s) on the creature = **release** dialog.
 
 **Physical PWR button:** short = screen on/off · long (4 s) = full power-off
@@ -230,6 +236,10 @@ finish before the inactivity countdown restarts.
 Before shutdown, the first touch on a dimmed screen only restores the display.
 The pet **stays asleep until you tap Light**, including after powering back on;
 offline progression treats the saved pet as sleeping.
+
+Startup applies the saved sleep state before enabling sound. The display stays
+dark until the first complete frame is ready, then uses the appropriate awake
+or sleeping brightness.
 
 ## Decisions: you choose, and you watch
 

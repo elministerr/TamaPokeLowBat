@@ -128,6 +128,7 @@ TEST(idle_power, shutdown_saves_latest_state_and_rtc_for_sleeping_offline_progre
   makeIdlePet(pet, power);
   mockAdvanceMillis(120000);
   CHECK(power.update(pet));
+  pet.update(millis());
   pet.energy = 20;
   pet.fullness = 70;
   CHECK(!pet.savePending());  // debe guardar aunque el save periodico no toque

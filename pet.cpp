@@ -10,10 +10,12 @@ void Pet::begin() {
   } else {
     load();
   }
-  lastTick = millis();
+  lastTick = millis() - tickCarryMs;
 }
 
 void Pet::newEgg() {
+  lastTick = millis();
+  tickCarryMs = 0;
   ceremony = CER_NONE;
   neglectTicks = 0;
   weight = 0;
@@ -46,21 +48,35 @@ static uint8_t dropTo(uint8_t v, uint8_t d, uint8_t fl) {
   return (v - fl > d) ? v - d : fl;
 }
 
-void Pet::setClock(uint32_t nowEpoch) {
+void Pet::observeClock(uint32_t nowEpoch) {
+  if (!nowEpoch) return;
   lastSeenEpoch = nowEpoch;
+  clockSampleMs = millis();
+}
+
+void Pet::setClock(uint32_t nowEpoch) {
+  observeClock(nowEpoch);
   if (nowEpoch) save();  // persiste ya: un corte de luz no pierde la referencia
 }
 
 void Pet::syncClock(uint32_t nowEpoch) {
   uint32_t seen = prefs.getUInt("seen", 0);
-  lastSeenEpoch = nowEpoch;
   if (nowEpoch == 0) return;
-  uint32_t mins = (seen && nowEpoch > seen) ? (nowEpoch - seen) / 60 : 0;
-  if (mins < 2 || ceremony != CER_NONE || starterPick) {
-    save();  // primera vez, sin tiempo que aplicar o aun eligiendo inicial
+  observeClock(nowEpoch);
+  if (ceremony != CER_NONE || starterPick) {
+    lastTick = millis();  // el tiempo pausado no deja fracciones pendientes
+    tickCarryMs = 0;
+    save();
     return;
   }
-  if (mins > 14UL * 24 * 60) mins = 14UL * 24 * 60;  // tope: 2 semanas
+  uint32_t seconds = (seen && nowEpoch > seen) ? nowEpoch - seen : 0;
+  if (seconds > 14UL * 24 * 60 * 60) seconds = 14UL * 24 * 60 * 60;
+  // Sumar tambien la parte del ultimo minuto guardado. Al reanudar, esa
+  // fraccion sigue contando en vivo: 40 s encendido + 20 s apagado = 1 minuto.
+  uint64_t elapsed = (uint64_t)seconds * 1000 + tickCarryMs;
+  uint32_t mins = elapsed / PET_TICK_MS;
+  tickCarryMs = elapsed % PET_TICK_MS;
+  lastTick = millis() - tickCarryMs;
 
   for (uint32_t i = 0; i < mins; i++) {
     ageMinutes++;
@@ -557,11 +573,15 @@ PetMood Pet::mood() const {
 }
 
 void Pet::saveForPowerOff(uint32_t nowEpoch) {
-  if (nowEpoch) lastSeenEpoch = nowEpoch;
+  update(millis());  // aplicar ticks completos antes de guardar la fraccion
+  observeClock(nowEpoch);
   save();  // obligatorio aunque no haya autoguardado pendiente o falle el RTC
 }
 
 void Pet::save() {
+  uint32_t saveNow = millis();
+  tickCarryMs = (starterPick || ceremony != CER_NONE) ? 0 : (saveNow - lastTick) % PET_TICK_MS;
+  uint32_t savedEpoch = lastSeenEpoch ? lastSeenEpoch + (saveNow - clockSampleMs) / 1000 : 0;
   ticksSinceSave = 0;
   pendingSave = false;
   prefs.putUChar("full", fullness);
@@ -582,13 +602,14 @@ void Pet::save() {
   prefs.putBool("stpk", starterPick);
   prefs.putBytes("dexsh", dexShinyReg, sizeof(dexShinyReg));
   prefs.putUInt("age", ageMinutes);
+  prefs.putUInt("tickms", tickCarryMs);
   prefs.putShort("dexn", speciesId);
   prefs.putShort("eggT2", eggTarget);
   prefs.putUChar("crack", eggTaps);
   prefs.putUChar("mist", careMistakes);
   prefs.putBool("sleep", sleeping);
   prefs.putUChar("lend", lastEnd);
-  if (lastSeenEpoch) prefs.putUInt("seen", lastSeenEpoch);
+  if (savedEpoch) prefs.putUInt("seen", savedEpoch);
   prefs.putBytes("dexreg", dexReg, sizeof(dexReg));
   prefs.putUShort("strk", streak);
   prefs.putUShort("bstrk", bestStreak);
@@ -626,6 +647,8 @@ void Pet::load() {
   starterPick = prefs.getBool("stpk", false);
   prefs.getBytes("dexsh", dexShinyReg, sizeof(dexShinyReg));
   ageMinutes = prefs.getUInt("age", 0);
+  tickCarryMs = prefs.getUInt("tickms", 0);  // guardados antiguos: sin fraccion
+  if (tickCarryMs >= PET_TICK_MS) tickCarryMs = 0;
   if (prefs.isKey("dexn")) {
     speciesId = prefs.getShort("dexn", -1);
     eggTarget = prefs.getShort("eggT2", 4);

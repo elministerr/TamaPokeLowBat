@@ -4,6 +4,7 @@
 #include <Wire.h>
 #include <ESP_I2S.h>
 #include <Preferences.h>
+#include <atomic>
 
 // ---------------------------------------------------------------------------
 // Audio del TamaPoke: códec ES8311 (DAC -> amplificador PA -> altavoz) por I2S.
@@ -17,9 +18,9 @@
 #define SAMPLE_RATE 16000
 
 static I2SClass i2s;
-static bool gReady = false;
-static bool gOn = true;
-static bool gSleeping = false;
+static std::atomic<bool> gReady{false};
+static std::atomic<AudioVolume> gVolume{AUDIO_HIGH};
+static std::atomic<bool> gSleeping{true};
 static QueueHandle_t gQ = nullptr;
 
 // El NS4150B tarda bastante mas de 8 ms en estabilizarse tras cada apagado, asi
@@ -30,7 +31,7 @@ static QueueHandle_t gQ = nullptr;
 static void updateAmplifierPower() {
   // gReady evita encenderlo en una placa donde el codec no arranco: ahi el
   // amplificador solo aportaria siseo, porque no va a sonar nada.
-  digitalWrite(PA, (gReady && gOn && !gSleeping) ? HIGH : LOW);
+  digitalWrite(PA, (gReady && audioEnabled() && !gSleeping) ? HIGH : LOW);
 }
 
 // ---- I2C del códec ----
@@ -113,10 +114,12 @@ static int16_t buf[256 * 2];  // estéreo intercalado (L=R)
 static void playTone(uint16_t f, uint16_t ms) {
   int total = SAMPLE_RATE * ms / 1000;
   int half = f ? (SAMPLE_RATE / (2 * f)) : 0;  // medio periodo en muestras
-  const int16_t amp = 5000;
+  static const int16_t amplitudes[AUDIO_VOLUME_COUNT] = {0, 625, 1250, 5000};
   int phase = 0, done = 0;
   bool high = true;
   while (done < total) {
+    if (!audioEnabled() || gSleeping) return;
+    const int16_t amp = amplitudes[audioVolume()];
     int n = total - done; if (n > 256) n = 256;
     for (int i = 0; i < n; i++) {
       int16_t s = 0;
@@ -137,18 +140,28 @@ static void playTone(uint16_t f, uint16_t ms) {
 static void audioTask(void *) {
   uint8_t id;
   for (;;) {
-    if (xQueueReceive(gQ, &id, portMAX_DELAY) && gOn && !gSleeping && gReady &&
+    if (xQueueReceive(gQ, &id, portMAX_DELAY) && audioEnabled() && !gSleeping && gReady &&
         id < SFX_COUNT) {
       const SfxDef &d = SFX[id];
-      for (uint8_t i = 0; i < d.len; i++) playTone(d.n[i].f, d.n[i].ms);
+      for (uint8_t i = 0; i < d.len && audioEnabled() && !gSleeping; i++) playTone(d.n[i].f, d.n[i].ms);
     }
   }
 }
 
-void audioBegin() {
+void audioBegin(bool sleeping) {
+  gReady = false;
+  gSleeping = sleeping;
+  gQ = nullptr;
   // I2S primero: arranca el MCLK que necesita el códec para engancharse
   pinMode(PA, OUTPUT);
   digitalWrite(PA, LOW);   // hasta saber si el sonido esta activado
+
+  Preferences p;
+  p.begin("tamapoke", true);
+  // Migracion: OFF sigue apagado; el antiguo ON conserva el volumen original.
+  uint8_t volume = p.getUChar("sndvol", p.getBool("snd", true) ? AUDIO_HIGH : AUDIO_OFF);
+  gVolume = volume < AUDIO_VOLUME_COUNT ? (AudioVolume)volume : AUDIO_HIGH;
+  p.end();
 
   i2s.setPins(I2S_BCK_IO, I2S_WS_IO, I2S_DO_IO, I2S_DI_IO, I2S_MCK_IO);
   if (!i2s.begin(I2S_MODE_STD, SAMPLE_RATE, I2S_DATA_BIT_WIDTH_16BIT,
@@ -158,34 +171,40 @@ void audioBegin() {
   }
   if (!es8311Init()) { Serial.println("ES8311 no responde (audio off)"); return; }
 
-  Preferences p;
-  p.begin("tamapoke", true);
-  gOn = p.getBool("snd", true);
-  p.end();
-
+  gQ = xQueueCreate(8, sizeof(uint8_t));
+  if (!gQ) { Serial.println("Sin memoria para audio"); return; }
+  if (xTaskCreatePinnedToCore(audioTask, "audio", 4096, nullptr, 1, nullptr, 0) != pdPASS) {
+    vQueueDelete(gQ);
+    gQ = nullptr;
+    Serial.println("No se pudo iniciar audio");
+    return;
+  }
   gReady = true;
   updateAmplifierPower();
-  gQ = xQueueCreate(8, sizeof(uint8_t));
-  xTaskCreatePinnedToCore(audioTask, "audio", 4096, nullptr, 1, nullptr, 0);
-  sfxPlay(SFX_HATCH);  // jingle de arranque (confirma que suena)
+  sfxPlay(SFX_HATCH);  // solo suena si la mascota arranca despierta y hay volumen
 }
 
 void sfxPlay(uint8_t id) {
-  if (gReady && gOn && gQ) xQueueSend(gQ, &id, 0);  // descarta si la cola esta llena
+  if (gReady && audioEnabled() && !gSleeping && gQ && id < SFX_COUNT) xQueueSend(gQ, &id, 0);
 }
 
-void audioSetEnabled(bool on) {
-  gOn = on;
+void audioSetVolume(AudioVolume volume) {
+  if (volume >= AUDIO_VOLUME_COUNT || volume == audioVolume()) return;
+  gVolume = volume;
+  if (volume == AUDIO_OFF && gQ) xQueueReset(gQ);
   updateAmplifierPower();
   Preferences p;
   p.begin("tamapoke", false);
-  p.putBool("snd", on);
+  p.putUChar("sndvol", volume);
+  p.putBool("snd", volume != AUDIO_OFF);  // compatible si se vuelve al firmware anterior
   p.end();
 }
-bool audioEnabled() { return gOn; }
+AudioVolume audioVolume() { return gVolume.load(); }
+bool audioEnabled() { return audioVolume() != AUDIO_OFF; }
 
 void audioSetSleeping(bool sleeping) {
   if (gSleeping == sleeping) return;
   gSleeping = sleeping;
+  if (sleeping && gQ) xQueueReset(gQ);
   updateAmplifierPower();  // durmiendo no hay efectos: amp apagado, sin consumo
 }
