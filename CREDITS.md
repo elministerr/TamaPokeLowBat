@@ -29,6 +29,12 @@ Huge thanks to that whole community for an enormous amount of work.
 
 ## Software / hardware
 
+Original Pokémon game cries are downloaded on demand from
+[PokeAPI/cries](https://github.com/PokeAPI/cries), whose recordings come from
+Pokémon Showdown and Veekun. Pokémon audio belongs to Nintendo / Game Freak /
+The Pokémon Company. The preparation tool converts the legacy recordings to
+16 kHz mono PCM WAV; the audio files are separate from the MIT firmware code.
+
 | Component | Author / source |
 |---|---|
 | GFX Library for Arduino | [moononournation](https://github.com/moononournation/Arduino_GFX) |

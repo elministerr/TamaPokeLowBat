@@ -8,6 +8,13 @@ Updating from the [web installer](https://socquique.github.io/TamaPoke/web/)
 
 ## Unreleased
 
+- In Pokédex details, tapping the Pokémon plays that species' cry and keeps the
+  detail view open. Tap the lower part of the screen to return to the overview.
+- Play the displayed Pokémon's recorded cry from SD on affection taps. Respect
+  volume and sleep, stop canceled playback, and prevent repeated taps from
+  queuing a long backlog. Missing/invalid recordings use the affection tone.
+- Add original-cry preparation and USB installation tools, plus `CRYINFO`/`CRY`
+  diagnostics. Existing valid recordings are preserved during installation.
 - Reduce Low and Medium sound amplitude by half; High retains its original level.
 - Preserve unfinished minutes across shutdowns, count offline periods under two
   minutes, and resume the live tick with the saved fraction. Pair saved game

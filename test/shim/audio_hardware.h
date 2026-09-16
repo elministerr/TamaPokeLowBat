@@ -11,3 +11,4 @@ bool mockAmplifierOn();
 bool mockAmplifierWasEnabled();
 size_t mockAudioQueued();
 void mockCodecPresent(bool present);
+void mockAudioOnWrite(void (*hook)());

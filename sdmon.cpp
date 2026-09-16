@@ -227,7 +227,7 @@ void SdMon::unload() {
 // ---------------------------------------------------------------------------
 // Protocolo de carga por USB (para llenar la SD sin sacarla de la placa):
 //   PUT <ruta> <bytes>\n  + datos crudos   -> "OK" ... "DONE"
-//   LS\n                                   -> listado de /mons
+//   LS [ruta]\n                            -> listado (por defecto /mons)
 // Usar con tools/send_sd.py
 // ---------------------------------------------------------------------------
 
@@ -241,14 +241,12 @@ bool sdSerialCommand(const String &line) {
       return true;
     }
     if (!path.startsWith("/")) path = "/" + path;
-    // acota la escritura a /mons/: la ruta llega tal cual de la linea serie, sin
-    // sanear, asi que un PUT manipulado podria escribir en cualquier sitio de la
-    // tarjeta. Los dos clientes reales (tools/send_sd.py y web/index.html) ya
-    // mandan nombres con el prefijo mons/.
-    if (!path.startsWith("/mons/") || path.indexOf("..") >= 0) {
+    // Limitar las cargas a sprites y gritos; nunca permitir rutas ascendentes.
+    if ((!path.startsWith("/mons/") && !path.startsWith("/cries/")) || path.indexOf("..") >= 0) {
       Serial.println("ERR");
       return true;
     }
+    if (path.startsWith("/cries/")) SD_MMC.mkdir("/cries");
     // FILE_WRITE ANADE al final si el fichero ya existe, asi que reintentar uno
     // que quedo a medias lo alargaba en vez de reemplazarlo: quedaba un sprite
     // corrupto y mas grande que el original. Importa mas desde que el instalador
@@ -283,8 +281,13 @@ bool sdSerialCommand(const String &line) {
     Serial.printf("total=%llu used=%llu\n", SD_MMC.totalBytes(), SD_MMC.usedBytes());
     Serial.println("DONE");
     return true;
-  } else if (line == "LS") {
-    File dir = SD_MMC.open("/mons");
+  } else if (line == "LS" || line.startsWith("LS ")) {
+    String path = line == "LS" ? "/mons" : line.substring(3);
+    if (!path.startsWith("/") || path.indexOf("..") >= 0) {
+      Serial.println("ERR");
+      return true;
+    }
+    File dir = SD_MMC.open(path);
     if (dir) {
       File e;
       while ((e = dir.openNextFile())) {

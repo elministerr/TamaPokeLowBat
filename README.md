@@ -210,6 +210,8 @@ If one bottoms out it counts as a *slip-up*.
 **Touch gestures:**
 - Tap the creature = pet it (+happiness, bond).
 - Horizontal swipe = open the **Pokédex / gallery**.
+  In a Pokémon's detail view, tap its picture to hear its cry. Tap the lower
+  part of the screen to return to the overview.
 - Vertical swipe up = open the **stat card** (4 pages: Profile / Battle / Medals /
   Progress; swipe between them; tap the name on Profile to rename; on Battle the
   "Train strength" button opens the bag).
@@ -240,6 +242,27 @@ offline progression treats the saved pet as sleeping.
 Startup applies the saved sleep state before enabling sound. The display stays
 dark until the first complete frame is ready, then uses the appropriate awake
 or sleeping brightness.
+
+### Pokémon cries
+
+Tapping the awake Pokémon for affection plays its original game cry from
+`/cries/NNN.wav` on the SD card (for example, Scyther uses `/cries/123.wav`).
+Shiny Pokémon use the same cry. Playback follows Off/Low/Medium/High, stops on
+mute or sleep, and ignores extra cry requests until the current one finishes.
+If the recording is missing or invalid, the usual affection tone is the fallback.
+
+To prepare all 151 cries and install missing files over USB, with the current
+firmware already flashed, run:
+
+```sh
+python3 tools/prepare_cries.py  # requires ffmpeg; downloads from PokeAPI/cries
+python3 tools/send_cries.py --port /dev/cu.usbmodem24201
+```
+
+The installer preserves valid recordings already on the card. Files must be
+uncompressed WAV, mono, 16-bit, 16 kHz, at most 10 seconds. `CRYINFO` over USB
+checks the current species and counts valid cries; `CRYINFO 123` checks one
+species. `CRY` previews the current Pokémon at the saved volume, if awake.
 
 ## Decisions: you choose, and you watch
 

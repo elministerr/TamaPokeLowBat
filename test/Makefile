@@ -9,9 +9,9 @@ SRC_DIR  := ..
 BUILD    := build
 BIN      := $(BUILD)/tamapoke_tests
 
-SOURCES := main.cpp shim/shim.cpp shim/audio_hardware.cpp test_pet.cpp test_dex.cpp \
-           test_i18n.cpp test_idle_power.cpp test_audio.cpp \
-           $(SRC_DIR)/pet.cpp $(SRC_DIR)/i18n.cpp $(SRC_DIR)/idle_power.cpp $(SRC_DIR)/audio.cpp
+SOURCES := main.cpp shim/shim.cpp shim/audio_hardware.cpp shim/sd_files.cpp test_pet.cpp test_dex.cpp \
+           test_i18n.cpp test_idle_power.cpp test_audio.cpp test_cry.cpp \
+           $(SRC_DIR)/pet.cpp $(SRC_DIR)/i18n.cpp $(SRC_DIR)/idle_power.cpp $(SRC_DIR)/audio.cpp $(SRC_DIR)/cry.cpp
 
 .PHONY: all run clean asan
 all: run

@@ -1,4 +1,6 @@
 #include "audio.h"
+#include "cry.h"
+#include "dex.h"
 #include "pin_config.h"
 #include <Arduino.h>
 #include <Wire.h>
@@ -22,6 +24,20 @@ static std::atomic<bool> gReady{false};
 static std::atomic<AudioVolume> gVolume{AUDIO_HIGH};
 static std::atomic<bool> gSleeping{true};
 static QueueHandle_t gQ = nullptr;
+static std::atomic<bool> gCryPending{false};
+static std::atomic<uint32_t> gGeneration{0};
+enum AudioKind : uint8_t { EFFECT, CRY };
+struct AudioEvent { uint32_t generation; uint16_t value; AudioKind kind; };
+
+static bool canPlay(uint32_t generation) {
+  return gReady && audioEnabled() && !gSleeping && generation == gGeneration;
+}
+
+static void cancelAudio() {
+  ++gGeneration; // interrupts active playback even after a quick mute/unmute
+  if (gQ) xQueueReset(gQ);
+  gCryPending = false;
+}
 
 // El NS4150B tarda bastante mas de 8 ms en estabilizarse tras cada apagado, asi
 // que encenderlo justo antes de cada efecto se comia los cortos: el jingle de
@@ -109,16 +125,16 @@ static const SfxDef SFX[SFX_COUNT] = {
 };
 
 static int16_t buf[256 * 2];  // estéreo intercalado (L=R)
+static const int16_t amplitudes[AUDIO_VOLUME_COUNT] = {0, 625, 1250, 5000};
 
 // reproduce un tono (o silencio si f==0) con rampa de ataque/caida anti-click
-static void playTone(uint16_t f, uint16_t ms) {
+static void playTone(uint16_t f, uint16_t ms, uint32_t generation) {
   int total = SAMPLE_RATE * ms / 1000;
   int half = f ? (SAMPLE_RATE / (2 * f)) : 0;  // medio periodo en muestras
-  static const int16_t amplitudes[AUDIO_VOLUME_COUNT] = {0, 625, 1250, 5000};
   int phase = 0, done = 0;
   bool high = true;
   while (done < total) {
-    if (!audioEnabled() || gSleeping) return;
+    if (!canPlay(generation)) return;
     const int16_t amp = amplitudes[audioVolume()];
     int n = total - done; if (n > 256) n = 256;
     for (int i = 0; i < n; i++) {
@@ -137,14 +153,51 @@ static void playTone(uint16_t f, uint16_t ms) {
   }
 }
 
-static void audioTask(void *) {
-  uint8_t id;
-  for (;;) {
-    if (xQueueReceive(gQ, &id, portMAX_DELAY) && audioEnabled() && !gSleeping && gReady &&
-        id < SFX_COUNT) {
-      const SfxDef &d = SFX[id];
-      for (uint8_t i = 0; i < d.len && audioEnabled() && !gSleeping; i++) playTone(d.n[i].f, d.n[i].ms);
+static bool playCry(int16_t dex, uint32_t generation) {
+  CryFile cry;
+  if (!cry.open(dex)) {
+    Serial.printf("cry #%d: missing/invalid WAV; using affection tone\n", dex);
+    return false;
+  }
+  Serial.printf("cry=%s samples=%lu\n", cry.path(), (unsigned long)cry.sampleCount());
+  int16_t mono[256];
+  uint32_t done = 0;
+  while (canPlay(generation)) {
+    size_t n = cry.read(mono, 256);
+    if (!n) break;
+    int16_t amp = amplitudes[audioVolume()];
+    for (size_t i = 0; i < n; ++i) {
+      int32_t s = (int32_t)mono[i] * amp / 32768;
+      uint32_t index = done + i, left = cry.sampleCount() - index;
+      if (index < 64) s = s * (int32_t)index / 64;
+      if (left < 96) s = s * (int32_t)left / 96;
+      buf[i * 2] = buf[i * 2 + 1] = (int16_t)s;
     }
+    if (!canPlay(generation)) break;
+    i2s.write((uint8_t *)buf, n * 4);
+    done += n;
+  }
+  return true;
+}
+
+static void audioTask(void *) {
+  AudioEvent event;
+  for (;;) {
+    if (!xQueueReceive(gQ, &event, portMAX_DELAY)) continue;
+    if (canPlay(event.generation)) {
+      uint16_t id = event.value;
+      bool effect = event.kind == EFFECT;
+      if (event.kind == CRY && !playCry(id, event.generation)) {
+        id = SFX_HEART;
+        effect = true;
+      }
+      if (effect && id < SFX_COUNT) {
+        const SfxDef &d = SFX[id];
+        for (uint8_t i = 0; i < d.len && canPlay(event.generation); i++)
+          playTone(d.n[i].f, d.n[i].ms, event.generation);
+      }
+    }
+    if (event.kind == CRY && event.generation == gGeneration) gCryPending = false;
   }
 }
 
@@ -152,6 +205,8 @@ void audioBegin(bool sleeping) {
   gReady = false;
   gSleeping = sleeping;
   gQ = nullptr;
+  gCryPending = false;
+  gGeneration = 0;
   // I2S primero: arranca el MCLK que necesita el códec para engancharse
   pinMode(PA, OUTPUT);
   digitalWrite(PA, LOW);   // hasta saber si el sonido esta activado
@@ -171,7 +226,7 @@ void audioBegin(bool sleeping) {
   }
   if (!es8311Init()) { Serial.println("ES8311 no responde (audio off)"); return; }
 
-  gQ = xQueueCreate(8, sizeof(uint8_t));
+  gQ = xQueueCreate(8, sizeof(AudioEvent));
   if (!gQ) { Serial.println("Sin memoria para audio"); return; }
   if (xTaskCreatePinnedToCore(audioTask, "audio", 4096, nullptr, 1, nullptr, 0) != pdPASS) {
     vQueueDelete(gQ);
@@ -185,13 +240,23 @@ void audioBegin(bool sleeping) {
 }
 
 void sfxPlay(uint8_t id) {
-  if (gReady && audioEnabled() && !gSleeping && gQ && id < SFX_COUNT) xQueueSend(gQ, &id, 0);
+  AudioEvent event{gGeneration.load(), id, EFFECT};
+  if (gQ && id < SFX_COUNT && canPlay(event.generation)) xQueueSend(gQ, &event, 0);
+}
+
+bool cryPlay(int16_t dex) {
+  AudioEvent event{gGeneration.load(), (uint16_t)dex, CRY};
+  if (!gQ || dex < 1 || dex > DEX_COUNT || !canPlay(event.generation) ||
+      gCryPending.exchange(true)) return false;
+  if (xQueueSend(gQ, &event, 0) == pdPASS) return true;
+  gCryPending = false;
+  return false;
 }
 
 void audioSetVolume(AudioVolume volume) {
   if (volume >= AUDIO_VOLUME_COUNT || volume == audioVolume()) return;
   gVolume = volume;
-  if (volume == AUDIO_OFF && gQ) xQueueReset(gQ);
+  if (volume == AUDIO_OFF) cancelAudio();
   updateAmplifierPower();
   Preferences p;
   p.begin("tamapoke", false);
@@ -205,6 +270,6 @@ bool audioEnabled() { return audioVolume() != AUDIO_OFF; }
 void audioSetSleeping(bool sleeping) {
   if (gSleeping == sleeping) return;
   gSleeping = sleeping;
-  if (sleeping && gQ) xQueueReset(gQ);
+  if (sleeping) cancelAudio();
   updateAmplifierPower();  // durmiendo no hay efectos: amp apagado, sin consumo
 }

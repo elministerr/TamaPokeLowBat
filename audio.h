@@ -21,6 +21,7 @@ enum AudioVolume : uint8_t { AUDIO_OFF = 0, AUDIO_LOW, AUDIO_MEDIUM, AUDIO_HIGH,
 
 void audioBegin(bool sleeping);  // aplicar el sueno ANTES de encender el amplificador
 void sfxPlay(uint8_t id);   // encola un efecto (no bloquea el loop)
+bool cryPlay(int16_t dex); // grito de la especie; ignora toques mientras suena
 void audioSetVolume(AudioVolume volume);
 AudioVolume audioVolume();
 bool audioEnabled();

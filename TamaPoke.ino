@@ -22,6 +22,7 @@
 #include "rtcbat.h"
 #include "i18n.h"
 #include "audio.h"
+#include "cry.h"
 #include "idle_power.h"
 #include "display.h"
 
@@ -451,6 +452,22 @@ void handleSerial() {
   } else if (line == "BEEP") {
     sfxPlay(SFX_HATCH);  // prueba de audio
     Serial.println("DONE");
+  } else if (line == "CRY") {
+    Serial.printf("queued=%d\n", cryPlay(pet.speciesId));
+    Serial.println("DONE");
+  } else if (line == "CRYINFO" || line.startsWith("CRYINFO ")) {
+    int16_t dex = line == "CRYINFO" ? pet.speciesId : line.substring(8).toInt();
+    CryFile cry;
+    bool found = cry.open(dex);
+    Serial.printf("spec=%d cry=%s samples=%lu volume=%u sleeping=%d\n",
+                  dex, found ? cry.path() : "missing/invalid",
+                  (unsigned long)cry.sampleCount(), (unsigned)audioVolume(), pet.sleeping);
+    if (line == "CRYINFO") {
+      uint16_t count = 0;
+      for (int16_t n = 1; n <= DEX_COUNT; ++n) if (cry.open(n)) ++count;
+      Serial.printf("valid_cries=%u/%u\n", count, DEX_COUNT);
+    }
+    Serial.println("DONE");
   } else if (line == "ABANDON") {
     pet.dbgRunawayReady();  // fuerza el estado "lista para escaparse" (test del boton)
     Serial.println("DONE");
@@ -728,7 +745,7 @@ void onTap(int16_t x, int16_t y) {
   if (inPetZone(x, y)) {
     Serial.println("PET");
     pet.caress();
-    if (!pet.sleeping) sfxPlay(SFX_HEART);
+    if (!pet.sleeping) cryPlay(pet.speciesId);
   }
 }
 
@@ -1903,6 +1920,7 @@ void keyboardTap(int16_t x, int16_t y) {
 #define GAL_X 73
 #define GAL_Y 84
 #define GAL_CELL 80
+#define GAL_DETAIL_BACK_Y 350  // zona inferior, debajo del sprite (pies en y=300)
 
 // dibuja una miniatura centrada en su celda; sil=true la pinta en tinta
 void drawThumb(const uint8_t *b, int x, int y, int s, bool sil) {
@@ -1996,10 +2014,14 @@ void renderGallery() {
 }
 
 void galleryTap(int16_t x, int16_t y) {
-  if (galleryDetail) {  // volver a la rejilla
-    galleryDetail = 0;
-    galleryPmd.unload();
-    galleryDirty = true;
+  if (galleryDetail) {
+    if (y >= GAL_DETAIL_BACK_Y) {  // parte inferior: volver a la rejilla
+      galleryDetail = 0;
+      galleryPmd.unload();
+      galleryDirty = true;
+    } else if (y >= 90) {  // zona del Pokemon: oir SU grito sin cerrar el detalle
+      cryPlay(galleryDetail);
+    }
     return;
   }
   if (y < 72) {  // tocar la cabecera = salir
